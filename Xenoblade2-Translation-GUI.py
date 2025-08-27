@@ -9,6 +9,8 @@ import configparser
 from tkinter import font  # Keep this for now, might be needed for text height calculation
 import re
 import atexit
+import sys
+import subprocess
 
 # --- New Global Variables ---
 BASE_DIR = None
@@ -23,6 +25,19 @@ UNSAVED_CHANGES = False
 GAME_VERSION = None  # 'Xenoblade2' or 'Xenoblade3'
 
 # --- Helper Functions ---
+def open_path(path):
+    """Opens a file or directory in a cross-platform way."""
+    try:
+        if sys.platform == "win32":
+            os.startfile(os.path.normpath(path))
+        elif sys.platform == "darwin":  # macOS
+            subprocess.run(['open', path], check=True)
+        else:  # linux and other UNIX-like
+            subprocess.run(['xdg-open', path], check=True)
+    except (OSError, subprocess.CalledProcessError, FileNotFoundError) as e:
+        messagebox.showerror("Error", f"Unable to open '{os.path.basename(path)}': {e}")
+
+
 def load_json(filepath):
     """Loads JSON data from a file."""
     try:
@@ -33,23 +48,37 @@ def load_json(filepath):
         return None
 
 def save_json(filepath, data):
-    """Saves JSON data to a file, replacing the 'name' field with 'edited_text'."""
+    """Saves JSON data to a file, replacing the appropriate field with 'edited_text'."""
     try:
         # First, create a copy of the data to avoid modifying the original
         data_copy = json.loads(json.dumps(data))
 
         for row in data_copy['rows']:
             if 'edited_text' in row:
-                # Save to last field in row
-                last_field = list(row.keys())[-1]
-                row[last_field] = row['edited_text']
+                if GAME_VERSION == "Xenoblade2":
+                    # For X2, save to 'name' field
+                    row['name'] = row['edited_text']
+                else:
+                    if GAME_VERSION == "XenobladeX":
+                        # For X, save to 'name' field
+                        row['name'] = row['edited_text']
+                    elif '<DBAF43F0>' in row:
+                        # For X3, save to DBAF43F0 field
+                        row['<DBAF43F0>'] = row['edited_text']
+                    else:
+                        # Fallback to last field
+                        last_field = list(row.keys())[-1]
+                        if last_field != 'edited_text':  # Skip if last field is edited_text itself
+                            row[last_field] = row['edited_text']
                 del row['edited_text']  # Remove the 'edited_text' field after saving
 
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data_copy, f, ensure_ascii=False, indent=2)
         messagebox.showinfo("Success", "JSON saved successfully!")
+        return True
     except Exception as e:
         messagebox.showerror("Error Saving JSON", str(e))
+        return False
 
 def show_character_counts(text_widget):
     """Show character counts for each line in a tooltip."""
@@ -134,10 +163,10 @@ def populate_table(tree, original_data, translated_data):
     def format_text(text):
         if not text:
             return ""
+        # Convert to string to avoid errors with non-string types (e.g., numbers)
+        text = str(text)
         # Replace special characters with visible representations
         text = text.replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
-        # Handle square brackets by adding spaces around them for better visibility
-        #text = text.replace('[', ' [ ').replace(']', ' ] ')
         return text
 
     # Use the configured DataTable.Treeview style
@@ -441,9 +470,7 @@ def save_table_data():
                 edited_text = edited_text.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
             
             if CURRENT_JSON_DATA and 'rows' in CURRENT_JSON_DATA and len(CURRENT_JSON_DATA['rows']) > index:
-                # Save to last field in row
                 row = CURRENT_JSON_DATA['rows'][index]
-                last_field = list(row.keys())[-1]
                 row['edited_text'] = edited_text
         except Exception as e:
             print(f"Error in row {index}: {str(e)}. Value type={type(edited_text)}, Content={repr(edited_text)}")  # Debug output
@@ -514,7 +541,7 @@ def edit_cell(event):
             def save_value(event=None):
                 # Get the text and convert special characters back to visible format
                 new_value = text_widget.get("1.0", "end-1c")
-                formatted_value = new_value.replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
+                formatted_value = new_value.replace('\n', '\\n').replace('\t', '\t').replace('\r', '\r')
 
                 # Update the tree values
                 values = list(TREE.item(item, 'values'))
@@ -539,6 +566,35 @@ def edit_cell(event):
                 
                 text_widget.destroy()
                 tooltip.destroy()
+            
+            # This function handles paste events manually to fix a bug on some Linux systems
+            # where selected text is not replaced upon pasting.
+            def custom_paste(event=None):
+                try:
+                    # Get the content from the clipboard
+                    clipboard_content = text_widget.clipboard_get()
+                    
+                    # Check if there is any selected text
+                    if text_widget.tag_ranges("sel"):
+                        # If so, delete the selected text first
+                        text_widget.delete("sel.first", "sel.last")
+                    
+                    # Insert the clipboard content at the current cursor position
+                    text_widget.insert(tk.INSERT, clipboard_content)
+                    
+                    # Trigger the character count update
+                    update_counts()
+
+                except tk.TclError:
+                    # This can happen if the clipboard is empty or contains non-text data.
+                    pass 
+                
+                # Return "break" to prevent the default (and potentially buggy)
+                # paste binding from running and causing duplication.
+                return "break"
+
+            # Bind the custom paste function to the paste event
+            text_widget.bind("<<Paste>>", custom_paste)
 
             # Bind enter key to save the value
             text_widget.bind('<Return>', save_value)
@@ -822,15 +878,9 @@ def open_translated_dir(event=None):
         item_path = file_list.item(selected_item, 'values')[1]
         if item_type == "folder":
             inner_folder_path = os.path.join(item_path, os.path.basename(item_path))
-            try:
-                os.startfile(inner_folder_path)
-            except OSError:
-                messagebox.showerror("Error", "Unable to open directory.")
+            open_path(inner_folder_path)
         elif item_type == "file":
-            try:
-                os.startfile(item_path)
-            except OSError:
-                messagebox.showerror("Error", "Unable to open file.")
+            open_path(os.path.dirname(item_path))
 
 def open_original_dir(event=None):
     selected_item = file_list.selection()
@@ -847,23 +897,18 @@ def open_original_dir(event=None):
             
             # Check if the item is a folder or a file
             if item_type == "folder":
+                inner_original_path = os.path.join(original_path, os.path.basename(original_path))
                 # Check if the directory exists in the second base directory
-                if os.path.isdir(original_path):
-                    try:
-                        os.startfile(original_path)
-                    except OSError:
-                        messagebox.showerror("Error", "Unable to open original directory.")
+                if os.path.isdir(inner_original_path):
+                    open_path(inner_original_path)
                 else:
                     messagebox.showinfo("Info", "Original directory not found.")
             elif item_type == "file":
                 # Check if the file exists in the second base directory
                 if os.path.isfile(original_path):
-                    try:
-                        os.startfile(original_path)
-                    except OSError:
-                        messagebox.showerror("Error", "Unable to open original file.")
+                    open_path(os.path.dirname(original_path))
                 else:
-                    messagebox.showinfo("Info", "Original file not found.")
+                    messagebox.showinfo("Info", "Original file/directory not found.")
         else:
             messagebox.showinfo("Info", "Second base directory not set.")
 
