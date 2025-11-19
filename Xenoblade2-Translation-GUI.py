@@ -11,6 +11,7 @@ import re
 import atexit
 import sys
 import subprocess
+import traceback
 
 # --- New Global Variables ---
 BASE_DIR = None
@@ -23,6 +24,7 @@ CURRENT_ORIGINAL_JSON_DATA = None  # Original language data
 TREE = None  # global tree variable
 UNSAVED_CHANGES = False
 GAME_VERSION = None  # 'Xenoblade2' or 'Xenoblade3'
+context_menu_event = None # For treeview context menu
 
 # --- Helper Functions ---
 def open_path(path):
@@ -118,9 +120,9 @@ def check_line_length(filename, text):
         return False
 
     if filename.startswith("bf"):
-        limit = 55
+        limit = 54
     elif filename.startswith("campfev") or filename.startswith("fev") or filename.startswith("kizuna") or filename.startswith("qst") or filename.startswith("tlk"):
-        limit = 41
+        limit = 39
     else:
         return False  # No limit defined for this filename
 
@@ -137,7 +139,7 @@ def calculate_text_height(text, font, width):
     text_widget = tk.Text(root, font=font, width=width)
     text_widget.insert("1.0", text)
     text_widget.update_idletasks()  # Force update of the widget
-    
+
     # Calculate total height needed
     total_lines = 1
     for line in text.split('\\n'):
@@ -147,16 +149,20 @@ def calculate_text_height(text, font, width):
         bbox = text_widget.bbox("end")
         if bbox:
             total_lines += bbox[1] // bbox[3] if bbox[3] > 0 else 1
-    
+
     line_height = font.metrics("linespace")
     height = total_lines * line_height
-    
+
     text_widget.destroy()
     return height + 10  # Add extra padding
 
 def populate_table(tree, original_data, translated_data):
     """Populates the Treeview table with JSON data from both original and translated files."""
     # Clear existing data
+    if tree is None:
+        print("Error: Tree is None in populate_table")
+        return
+
     for item in tree.get_children():
         tree.delete(item)
 
@@ -174,7 +180,7 @@ def populate_table(tree, original_data, translated_data):
 
     # Use translated data if available, otherwise use original
     data = translated_data if translated_data else original_data
-    
+
     if data and 'rows' in data:
         for idx, row in enumerate(data['rows']):
             # Get original text if available - always use last field in row
@@ -182,7 +188,7 @@ def populate_table(tree, original_data, translated_data):
             if original_data and 'rows' in original_data and len(original_data['rows']) > idx:
                 original_row = original_data['rows'][idx]
                 original_text = list(original_row.values())[-1] if original_row else ''
-            
+
             # Get translated text - always use last field in row
             translated_text = list(row.values())[-1] if row else ''
 
@@ -192,7 +198,7 @@ def populate_table(tree, original_data, translated_data):
                 format_text(original_text),
                 format_text(translated_text)
             ))
-            
+
             # Check line length and apply tag
             if CURRENT_JSON_PATH:
                 filename = os.path.basename(CURRENT_JSON_PATH)
@@ -234,33 +240,33 @@ ORIGINAL_FILE_LIST = []
 def filter_folders(event=None):
     """Filters folders based on search text."""
     search_text = search_var.get().lower()
-    
+
     if not ORIGINAL_FILE_LIST:
         return
-        
+
     # Clear the current view
     for item in file_list.get_children():
         file_list.delete(item)
-    
+
     # Rebuild the tree from original list
     for folder in ORIGINAL_FILE_LIST:
         folder_name = folder['text'].lower()
         folder_matches = not search_text or search_text in folder_name
-        
+
         # If folder matches or any child matches, show it
         if folder_matches or any(search_text in child['text'].lower() for child in folder['children']):
             # Check if folder has a color tag
             folder_tags = ()
             if folder['text'] in FOLDER_STATUS:
                 folder_tags = (FOLDER_STATUS[folder['text']],)
-            
+
             # Recreate the folder item
-            folder_id = file_list.insert("", "end", 
-                text=folder['text'], 
+            folder_id = file_list.insert("", "end",
+                text=folder['text'],
                 values=folder['values'],
                 tags=folder_tags
             )
-            
+
             # Add matching children
             for child in folder['children']:
                 if not search_text or search_text in child['text'].lower():
@@ -269,9 +275,9 @@ def filter_folders(event=None):
                     rel_path = child['values'][1].replace(BASE_DIR + '\\', '').replace('\\', '/')
                     if rel_path in FOLDER_STATUS:
                         child_tags = (FOLDER_STATUS[rel_path],)
-                    
-                    child_id = file_list.insert(folder_id, "end", 
-                        text=child['text'], 
+
+                    child_id = file_list.insert(folder_id, "end",
+                        text=child['text'],
                         values=child['values'],
                         tags=child_tags
                     )
@@ -281,12 +287,12 @@ def detect_game_version(base_dir):
     # Check for Xenoblade 3 structure (has game/ and evt/ folders)
     game_path = os.path.join(base_dir, "game")
     evt_path = os.path.join(base_dir, "evt")
-    
+
     if os.path.exists(game_path) and os.path.exists(evt_path):
         # Found Xenoblade 3 structure
         root.title("BDAT Translation Tool [X3]")
         return "Xenoblade3"
-    
+
     # Check for Xenoblade X structure (Modern schema but direct bdat folders)
     for item in os.listdir(base_dir):
         item_path = os.path.join(base_dir, item)
@@ -343,7 +349,7 @@ def populate_file_list():
                                 'values': ("folder", bdat_folder_path),
                                 'children': []
                             })
-                            
+
                             if bdat_folder in FOLDER_STATUS:
                                 file_list.item(folder_id, tags=(FOLDER_STATUS[bdat_folder],))
 
@@ -370,7 +376,7 @@ def populate_file_list():
                         'values': ("folder", bdat_folder_path),
                         'children': []
                     })
-                    
+
                     if bdat_folder in FOLDER_STATUS:
                         file_list.item(folder_id, tags=(FOLDER_STATUS[bdat_folder],))
 
@@ -389,11 +395,11 @@ def populate_file_list():
 
 def load_table_data(json_path):
     """Loads the selected JSON file into the table."""
-    global CURRENT_JSON_PATH, CURRENT_JSON_DATA, CURRENT_ORIGINAL_JSON_PATH, CURRENT_ORIGINAL_JSON_DATA, GAME_VERSION
+    global CURRENT_JSON_PATH, CURRENT_JSON_DATA, CURRENT_ORIGINAL_JSON_PATH, CURRENT_ORIGINAL_JSON_DATA, GAME_VERSION, TREE
 
     CURRENT_JSON_PATH = json_path
     CURRENT_JSON_DATA = load_json(CURRENT_JSON_PATH)
-    
+
     # Find corresponding file in second base dir if it exists
     CURRENT_ORIGINAL_JSON_DATA = None
     if SECOND_BASE_DIR:
@@ -414,9 +420,12 @@ def load_table_data(json_path):
                 if os.path.exists(opposite_path):
                     CURRENT_ORIGINAL_JSON_PATH = opposite_path
                     CURRENT_ORIGINAL_JSON_DATA = load_json(opposite_path)
-    
+
     if CURRENT_JSON_DATA:
-        populate_table(TREE, CURRENT_ORIGINAL_JSON_DATA, CURRENT_JSON_DATA)
+        if TREE:
+            populate_table(TREE, CURRENT_ORIGINAL_JSON_DATA, CURRENT_JSON_DATA)
+        else:
+            print("TREE is not initialized yet.")
 
 def file_list_select(event):
     """Handles selection in the file list."""
@@ -430,9 +439,11 @@ def file_list_select(event):
         elif response is None:  # Cancel
             return  # Do nothing, stay on the current file
 
-    selected_item = file_list.selection()
-    if not selected_item:
+    selection = file_list.selection()
+    if not selection:
         return
+
+    selected_item = selection[0] # Get first item ID
 
     item_type = file_list.item(selected_item, 'values')[0]
     item_path = file_list.item(selected_item, 'values')[1]
@@ -447,7 +458,7 @@ def file_list_select(event):
             if json_files:
                 first_json_path = os.path.join(inner_folder_path, json_files[0])
                 load_table_data(first_json_path)
-    
+
     UNSAVED_CHANGES = False  # Reset the flag after loading new data
 
 def save_table_data():
@@ -468,7 +479,7 @@ def save_table_data():
                     print(f"Problem in row {index}: Found non-string value (type={type(edited_text)}), converting to string. Content={repr(edited_text)}")  # Debug output
                     edited_text = str(edited_text)
                 edited_text = edited_text.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
-            
+
             if CURRENT_JSON_DATA and 'rows' in CURRENT_JSON_DATA and len(CURRENT_JSON_DATA['rows']) > index:
                 row = CURRENT_JSON_DATA['rows'][index]
                 row['edited_text'] = edited_text
@@ -520,12 +531,12 @@ def edit_cell(event):
             # Calculate needed height based on text content
             text_height = calculate_text_height(value, font_style, width)
             height = max(text_height // 20, 4)  # Convert pixels to lines, minimum 4 lines
-            
+
             # Create text widget with proper sizing
-            text_widget = tk.Text(TREE, 
-                                width=width//7, 
-                                height=height, 
-                                background="#FFFFE0", 
+            text_widget = tk.Text(TREE,
+                                width=width//7,
+                                height=height,
+                                background="#FFFFE0",
                                 font=font_style,
                                 wrap=tk.WORD)  # Enable word wrapping
             # Display escaped special characters for editing
@@ -563,32 +574,32 @@ def edit_cell(event):
                 height = calculate_text_height(formatted_value, font_style, width//7)
                 s = ttk.Style()
                 s.configure('Treeview', rowheight=int(height + 15))
-                
+
                 text_widget.destroy()
                 tooltip.destroy()
-            
+
             # This function handles paste events manually to fix a bug on some Linux systems
             # where selected text is not replaced upon pasting.
             def custom_paste(event=None):
                 try:
                     # Get the content from the clipboard
                     clipboard_content = text_widget.clipboard_get()
-                    
+
                     # Check if there is any selected text
                     if text_widget.tag_ranges("sel"):
                         # If so, delete the selected text first
                         text_widget.delete("sel.first", "sel.last")
-                    
+
                     # Insert the clipboard content at the current cursor position
                     text_widget.insert(tk.INSERT, clipboard_content)
-                    
+
                     # Trigger the character count update
                     update_counts()
 
                 except tk.TclError:
                     # This can happen if the clipboard is empty or contains non-text data.
-                    pass 
-                
+                    pass
+
                 # Return "break" to prevent the default (and potentially buggy)
                 # paste binding from running and causing duplication.
                 return "break"
@@ -621,17 +632,17 @@ def edit_cell(event):
                     for part in text.split('\n'):
                         # Then split by properly escaped \n (not just backslash)
                         temp_lines.extend(part.split('\\n'))
-                    
+
                     # Now properly handle the split parts
                     for line in temp_lines:
                         # Only add non-empty lines
                         if line.strip():
                             lines.append(line)
-                    
+
                     # Clear existing labels and create new ones
                     for child in tooltip.winfo_children():
                         child.destroy()
-                    
+
                     # Create new labels for each line
                     for i, line in enumerate(lines):
                         count = len(line)
@@ -640,15 +651,17 @@ def edit_cell(event):
                 except:
                     pass
                 return True
-            
+
             text_widget.bind('<KeyRelease>', update_counts)
 
 def mark_folder(status):
     """Marks the selected folder or file with a background color."""
-    selected_item = file_list.selection()
-    if not selected_item:
+    selection = file_list.selection()
+    if not selection:
         messagebox.showinfo("Info", "Please select a folder or file.")
         return
+
+    selected_item = selection[0]
 
     item_text = file_list.item(selected_item, 'text')
     item_path = file_list.item(selected_item, 'values')[1]
@@ -699,17 +712,10 @@ def load_config():
         print(f"Error loading config: {e}")
 
     # Apply colors to both folders and files based on loaded config
-    for item in file_list.get_children():
-        item_text = file_list.item(item, 'text')
-        item_path = file_list.item(item, 'values')[1]
-        item_type = file_list.item(item, 'values')[0]
-
-        # Get relative path from BASE_DIR
-        rel_path = os.path.relpath(item_path, BASE_DIR)
-        key = rel_path.replace('\\', '/')
-
-        if key in FOLDER_STATUS:
-            file_list.item(item, tags=(FOLDER_STATUS[key],))
+    # Note: This loop might not work effectively if called before populate_file_list is fully done,
+    # but populate_file_list handles folder coloring directly.
+    # We will handle nested file coloring after population.
+    pass
 
 def save_config():
     """Saves the folder status to the config file."""
@@ -818,18 +824,18 @@ def update_font_size(event=None):
         # Update the data table style
         style = ttk.Style()
         style.configure('DataTable.Treeview', font=('Calibri', font_size))
-        
+
         # Calculate and set new row height
         font_style = font.Font(family="Calibri", size=font_size)
         new_height = calculate_text_height("Sample Text", font_style, 200//7)
         style.configure('DataTable.Treeview', rowheight=int(new_height + 15))
-        
+
         # Apply the style to the treeview
         TREE.configure(style='DataTable.Treeview')
-        
+
         # Force refresh of the treeview
         TREE.update_idletasks()
-        
+
         # Repopulate table if data is loaded
         if CURRENT_JSON_PATH and CURRENT_ORIGINAL_JSON_DATA and CURRENT_JSON_DATA:
             populate_table(TREE, CURRENT_ORIGINAL_JSON_DATA, CURRENT_JSON_DATA)
@@ -874,8 +880,8 @@ file_list.bind("<Double-1>", file_list_select)  # Double-click to load
 def open_translated_dir(event=None):
     selected_item = file_list.selection()
     if selected_item:
-        item_type = file_list.item(selected_item, 'values')[0]
-        item_path = file_list.item(selected_item, 'values')[1]
+        item_type = file_list.item(selected_item[0], 'values')[0]
+        item_path = file_list.item(selected_item[0], 'values')[1]
         if item_type == "folder":
             inner_folder_path = os.path.join(item_path, os.path.basename(item_path))
             open_path(inner_folder_path)
@@ -885,16 +891,16 @@ def open_translated_dir(event=None):
 def open_original_dir(event=None):
     selected_item = file_list.selection()
     if selected_item:
-        item_type = file_list.item(selected_item, 'values')[0]
-        item_path = file_list.item(selected_item, 'values')[1]
-        
+        item_type = file_list.item(selected_item[0], 'values')[0]
+        item_path = file_list.item(selected_item[0], 'values')[1]
+
         # Check if a second base directory is set
         if SECOND_BASE_DIR:
             # Get the relative path from the base directory
             rel_path = os.path.relpath(item_path, BASE_DIR)
             # Construct the path in the second base directory
             original_path = os.path.join(SECOND_BASE_DIR, rel_path)
-            
+
             # Check if the item is a folder or a file
             if item_type == "folder":
                 inner_original_path = os.path.join(original_path, os.path.basename(original_path))
@@ -912,15 +918,200 @@ def open_original_dir(event=None):
         else:
             messagebox.showinfo("Info", "Second base directory not set.")
 
+def copy_file_content(mode="translated"):
+    """Copies the content of the selected JSON file to clipboard in [ID]: Content format."""
+    selection = file_list.selection()
+    if not selection:
+        return
+
+    selected_item = selection[0]
+
+    item_type = file_list.item(selected_item, 'values')[0]
+    item_path = file_list.item(selected_item, 'values')[1]
+
+    if item_type != "file":
+        messagebox.showwarning("Warning", "Please select a file to copy content.")
+        return
+
+    translated_path = item_path
+    target_original_path = None
+
+    # Determine original path if needed
+    if mode in ["original", "both", "both_sequential"]:
+        if not SECOND_BASE_DIR:
+            messagebox.showerror("Error", "Second Base Directory not set.")
+            return
+
+        rel_path = os.path.relpath(item_path, BASE_DIR)
+        original_path = os.path.join(SECOND_BASE_DIR, rel_path)
+
+        if os.path.exists(original_path):
+             target_original_path = original_path
+        elif GAME_VERSION in ["Xenoblade3", "XenobladeX"]:
+            parts = rel_path.split(os.sep)
+            if len(parts) > 1 and parts[0] in ["game", "evt"]:
+                opposite_folder = "evt" if parts[0] == "game" else "game"
+                opposite_path = os.path.join(SECOND_BASE_DIR, opposite_folder, *parts[1:])
+                if os.path.exists(opposite_path):
+                    target_original_path = opposite_path
+
+        if not target_original_path and mode == "original":
+             messagebox.showerror("Error", "Original file not found.")
+             return
+
+    # Load data based on mode
+    data_translated = load_json(translated_path) if mode in ["translated", "both", "both_sequential"] else None
+    data_original = load_json(target_original_path) if target_original_path else None
+
+    # Get filename without extension
+    filename_no_ext = os.path.splitext(os.path.basename(item_path))[0]
+
+    output_lines = []
+    output_lines.append(filename_no_ext)
+    output_lines.append("")
+
+    if mode == "both" and data_translated and data_original:
+        # Create a map for original data for quick lookup
+        org_map = {row.get('$id'): list(row.values())[-1] for row in data_original['rows']}
+
+        for row in data_translated['rows']:
+            row_id = row.get('$id', '')
+            tl_text = list(row.values())[-1] if row else ''
+            org_text = org_map.get(row_id, "")
+
+            if tl_text is None: tl_text = ""
+            if org_text is None: org_text = ""
+
+            tl_text = str(tl_text).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            org_text = str(org_text).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+
+            output_lines.append(f"[{row_id}]: {org_text}")
+            output_lines.append(f"[{row_id}]: {tl_text}")
+            output_lines.append("") # Separator
+
+    elif mode == "both_sequential" and data_translated and data_original:
+        # Block 1: Original
+        for row in data_original['rows']:
+            row_id = row.get('$id', '')
+            text_content = list(row.values())[-1] if row else ''
+            if text_content is None: text_content = ""
+            text_content = str(text_content).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            output_lines.append(f"[{row_id}]: {text_content}")
+
+        output_lines.append("")
+        output_lines.append("")
+
+        # Block 2: Translated
+        output_lines.append(filename_no_ext)
+        output_lines.append("")
+        for row in data_translated['rows']:
+            row_id = row.get('$id', '')
+            text_content = list(row.values())[-1] if row else ''
+            if text_content is None: text_content = ""
+            text_content = str(text_content).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            output_lines.append(f"[{row_id}]: {text_content}")
+
+    elif mode == "original" and data_original:
+        for row in data_original['rows']:
+            row_id = row.get('$id', '')
+            text_content = list(row.values())[-1] if row else ''
+            if text_content is None: text_content = ""
+            text_content = str(text_content).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            output_lines.append(f"[{row_id}]: {text_content}")
+
+    elif mode == "translated" and data_translated:
+        for row in data_translated['rows']:
+            row_id = row.get('$id', '')
+            text_content = list(row.values())[-1] if row else ''
+            if text_content is None: text_content = ""
+            text_content = str(text_content).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            output_lines.append(f"[{row_id}]: {text_content}")
+
+    final_text = "\n".join(output_lines)
+
+    root.clipboard_clear()
+    root.clipboard_append(final_text)
+    root.update()
+    messagebox.showinfo("Success", f"Copied content ({mode}) to clipboard.")
+
+def paste_file_content():
+    """Pastes translated lines from clipboard into the currently opened file."""
+    if not CURRENT_JSON_DATA:
+        messagebox.showerror("Error", "No file is currently loaded.")
+        return
+
+    try:
+        clipboard_text = root.clipboard_get()
+    except:
+        messagebox.showinfo("Info", "Clipboard is empty.")
+        return
+
+    lines = clipboard_text.splitlines()
+    updated_count = 0
+
+    # Map IDs to rows for O(1) lookup
+    id_to_row = {str(row.get('$id', '')): row for row in CURRENT_JSON_DATA.get('rows', [])}
+
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+
+        # Regex to capture ID and Content.
+        # Matches "[123]: some text"
+        # Non-greedy match for ID in case ID contains weird chars, though usually numeric.
+        match = re.match(r'^\[(.*?)]: (.*)$', line)
+
+        if match:
+            row_id = match.group(1)
+            content = match.group(2)
+
+            if row_id in id_to_row:
+                # Revert the escaping done during copy
+                # The copy function did: text.replace('\n', '\\n')...
+                # We must do the reverse.
+                content = content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+
+                # Update the row.
+                # We strictly update 'edited_text'.
+                # If it exists, overwrite. If not, create.
+                id_to_row[row_id]['edited_text'] = content
+                updated_count += 1
+
+    if updated_count > 0:
+        global UNSAVED_CHANGES
+        UNSAVED_CHANGES = True
+        # Refresh table
+        populate_table(TREE, CURRENT_ORIGINAL_JSON_DATA, CURRENT_JSON_DATA)
+        messagebox.showinfo("Success", f"Pasted and updated {updated_count} lines.")
+    else:
+        messagebox.showwarning("Warning", "No valid lines found in clipboard matching this file.")
+
 def show_context_menu(event):
     selected_item = file_list.selection()
     if selected_item:
+        # Rebuild context menu dynamically
+        context_menu.delete(0, "end")
+
+        context_menu.add_command(label="Open Translated JSON Directory", command=open_translated_dir)
+        context_menu.add_command(label="Open Original JSON Directory", command=open_original_dir)
+        context_menu.add_separator()
+        context_menu.add_command(label="Copy Original Content", command=lambda: copy_file_content("original"))
+        context_menu.add_command(label="Copy Translated Content", command=lambda: copy_file_content("translated"))
+        context_menu.add_command(label="Copy Both Content", command=lambda: copy_file_content("both"))
+        context_menu.add_command(label="Copy Both Content (Sequential)", command=lambda: copy_file_content("both_sequential"))
+
+        # Check if selected item matches currently opened file
+        # Use [0] to get the single ID from selection tuple
+        item_path = file_list.item(selected_item[0], 'values')[1]
+        # Normalize paths for comparison to be safe
+        if CURRENT_JSON_PATH and os.path.normpath(CURRENT_JSON_PATH) == os.path.normpath(item_path):
+            context_menu.add_separator()
+            context_menu.add_command(label="Paste Lines (Translated)", command=paste_file_content)
+
         context_menu.post(event.x_root, event.y_root)
 
-# Create context menu
+# Create context menu (Empty initially, populated in show_context_menu)
 context_menu = tk.Menu(root, tearoff=0)
-context_menu.add_command(label="Open Translated JSON Directory", command=open_translated_dir)
-context_menu.add_command(label="Open Original JSON Directory", command=open_original_dir)
 
 # Bind right click to show context menu
 file_list.bind("<Button-3>", show_context_menu)
@@ -974,9 +1165,9 @@ style = ttk.Style()
 style.configure('Treeview', rowheight=40)
 
 TREE = ttk.Treeview(
-    right_frame, 
-    columns=("ID", "LABEL", "ORIGINAL TEXT", "TRANSLATED TEXT"), 
-    show="headings", 
+    right_frame,
+    columns=("ID", "LABEL", "ORIGINAL TEXT", "TRANSLATED TEXT"),
+    show="headings",
     style='DataTable.Treeview'
 )
 TREE.heading("ID", text="ID")
@@ -1002,24 +1193,6 @@ TREE.tag_configure("red", background="red")
 # Bind double click to edit cell
 TREE.bind("<Double-1>", edit_cell)
 
-def copy_cell_value():
-    """Copies the value of the selected cell to the clipboard."""
-    item = TREE.selection()[0]  # Get the selected item
-    column_id = int(TREE.identify_column(event.x)[1:]) - 1  # Get the column ID
-    value = TREE.item(item, 'values')[column_id]  # Get the cell value
-    root.clipboard_clear()
-    root.clipboard_append(value)
-    root.update()
-
-def show_tree_context_menu(event):
-    """Shows the context menu for the Treeview."""
-    for item in TREE.selection():
-        tree_context_menu.post(event.x_root, event.y_root)
-
-# Create context menu for the Treeview
-tree_context_menu = tk.Menu(root, tearoff=0)
-tree_context_menu.add_command(label="Copy Cell Value", command=lambda: copy_cell_value())
-
 def show_tree_context_menu(event):
     """Shows the context menu for the Treeview."""
     tree_context_menu.post(event.x_root, event.y_root)
@@ -1028,6 +1201,9 @@ def show_tree_context_menu(event):
 
 def copy_cell_value():
     """Copies the value of the selected cell to the clipboard."""
+    if not TREE.selection():
+        return
+
     item = TREE.selection()[0]  # Get the selected item
     column_id = int(TREE.identify_column(context_menu_event.x)[1:]) - 1  # Get the column ID
     value = TREE.item(item, 'values')[column_id]  # Get the cell value
@@ -1035,45 +1211,53 @@ def copy_cell_value():
     root.clipboard_append(value)
     root.update()
 
+# Create context menu for the Treeview
+tree_context_menu = tk.Menu(root, tearoff=0)
+tree_context_menu.add_command(label="Copy Cell Value", command=lambda: copy_cell_value())
+
 # Bind right click to show context menu
 TREE.bind("<Button-3>", show_tree_context_menu)
 
-# Load GUI state on startup
-load_gui_state()
+# --- Application Initialization ---
 
-# Load config after GUI state is loaded and BASE_DIR is set
-if BASE_DIR:
-    print(f"Loading config from: {os.path.join(BASE_DIR, 'translation_config.ini')}")
-    load_config()
-    # Apply colors to folders based on loaded config
-    for item in file_list.get_children():
-        folder_name = file_list.item(item, 'text')
-        if folder_name in FOLDER_STATUS:
-            file_list.item(item, tags=(FOLDER_STATUS[folder_name],))
-    populate_file_list()  # Ensure the file list is populated with the correct colors
-    
-    # Apply colors to files after populating the file list
-    for item in file_list.get_children():
-        item_type = file_list.item(item, 'values')[0]
-        if item_type == "folder":
-            for child in file_list.get_children(item):
-                child_path = file_list.item(child, 'values')[1]
-                # Get the BDAT folder name (parent folder)
-                bdat_folder = os.path.basename(os.path.dirname(os.path.dirname(child_path)))
-                # Get relative path within BDAT folder
-                rel_path = os.path.relpath(child_path, os.path.join(BASE_DIR, bdat_folder))
-                # Convert to forward slashes for consistency
-                key = rel_path.replace('\\', '/')
-                if key in FOLDER_STATUS:
-                    file_list.item(child, tags=(FOLDER_STATUS[key],))
+def on_startup():
+    """Runs on application startup to load state and populate lists."""
+    load_gui_state()
 
-def delayed_populate():
-    # Select the first item in the file list if there are any
-    first_item = file_list.get_children()
-    if first_item:
-        file_list.selection_set(first_item[0])
-        file_list.event_generate("<<TreeviewSelect>>")  # Trigger the select event
+    if BASE_DIR:
+        print(f"Loading config from: {os.path.join(BASE_DIR, 'translation_config.ini')}")
+        try:
+            load_config()
+            populate_file_list()
 
-root.after(100, delayed_populate)  # Delay the population
+            # Apply colors to nested files after population
+            for item in file_list.get_children():
+                item_type = file_list.item(item, 'values')[0]
+                if item_type == "folder":
+                    for child in file_list.get_children(item):
+                        child_path = file_list.item(child, 'values')[1]
+                        # Get the BDAT folder name (parent folder)
+                        bdat_folder = os.path.basename(os.path.dirname(os.path.dirname(child_path)))
+                        # Get relative path within BDAT folder
+                        rel_path = os.path.relpath(child_path, os.path.join(BASE_DIR, bdat_folder))
+                        # Convert to forward slashes for consistency
+                        key = rel_path.replace('\\', '/')
+                        if key in FOLDER_STATUS:
+                            file_list.item(child, tags=(FOLDER_STATUS[key],))
 
+            # Select the first item if available
+            first_item = file_list.get_children()
+            if first_item:
+                file_list.selection_set(first_item[0])
+                file_list.event_generate("<<TreeviewSelect>>")
+
+        except Exception as e:
+            print(f"Error during startup population: {e}")
+            traceback.print_exc()
+            messagebox.showerror("Startup Error", f"An error occurred while loading the file list:\n{e}")
+
+# Use root.after to run initialization after the window is ready (important for Linux/GTK)
+root.after(100, on_startup)
+
+# Start the main loop
 root.mainloop()
